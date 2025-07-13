@@ -6,6 +6,7 @@ on:
       version:
         description: 'Release version to fix (e.g., 9)'
         required: true
+        type: number
 
 env:
   REGISTRY: ${{ secrets.REGISTRY }}
@@ -27,44 +28,47 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Apply fix
+      - name: Fix code
         run: |
-          echo "🔧 Здесь можно внести правки в код, если нужно"
-          # Пример: sed -i 's/OldName/NewName/g' src/client/pages/About.tsx
+          echo "// Place your fix commands here, e.g.:"
+          echo "sed -i 's/OldName/NewName/g' src/client/pages/About.tsx"
 
-      - name: Build fixed version
+      - name: Rebuild app
         run: npm run build
 
       - name: Login to Yandex Container Registry
-        run: echo "${{ secrets.YC_DOCKER_AUTH }}" | docker login --username oauth --password-stdin cr.yandex
+        run: echo ${{ secrets.YC_DOCKER_AUTH }} | docker login --username oauth --password-stdin cr.yandex
 
-      - name: Build and push Docker image
+      - name: Build and push fixed Docker image
         run: |
-          VERSION=${{ github.event.inputs.version }}
-          FIX_TAG="release-${VERSION}_fix1"
-
+          FIX_TAG="release-${{ github.event.inputs.version }}_fix1"
           docker build -t $REGISTRY:$FIX_TAG .
-          docker tag $REGISTRY:$FIX_TAG $REGISTRY:release-${VERSION}_latest
-
           docker push $REGISTRY:$FIX_TAG
-          docker push $REGISTRY:release-${VERSION}_latest
+          docker tag $REGISTRY:$FIX_TAG $REGISTRY:release-${{ github.event.inputs.version }}_latest
+          docker push $REGISTRY:release-${{ github.event.inputs.version }}_latest
 
-      - name: Tag and push fix tag
+      - name: Create git tag for fix
+        env:
+          TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          VERSION=${{ github.event.inputs.version }}
-          FIX_TAG="release-${VERSION}_fix1"
-
+          FIX_TAG="release-${{ github.event.inputs.version }}_fix1"
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git tag $FIX_TAG
-          git push origin --tags
+          git push https://x-access-token:${TOKEN}@github.com/${{ github.repository }} --tags
 
-      - name: Comment to GitHub issue
-        run: |
-          VERSION=${{ github.event.inputs.version }}
-          FIX_TAG="release-${VERSION}_fix1"
-          ISSUE_NUMBER=$(gh issue list --search "Release ${VERSION}" --limit 1 --json number --jq '.[0].number')
-          COMMENT="✅ Fix for release ${VERSION}: Docker image uploaded as \`${REGISTRY}:${FIX_TAG}\`"
-          echo "$COMMENT" | gh issue comment "$ISSUE_NUMBER" --body -
+      - name: Comment on release issue
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          REGISTRY: ${{ secrets.REGISTRY }}
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          gh auth login --with-token <<< "$GH_TOKEN"
+          ISSUE_NUMBER=$(gh issue list --search "Release $VERSION" --limit 1 --json number --jq '.[0].number')
+          if [ -z "$ISSUE_NUMBER" ]; then
+            echo "No issue found for Release $VERSION"
+            exit 1
+          fi
+          FIX_TAG="release-${VERSION}_fix1"
+          COMMENT="✅ Fix release $VERSION deployed. Docker image: \`${REGISTRY}:${FIX_TAG}\`"
+          echo "$COMMENT" | gh issue comment "$ISSUE_NUMBER" --body -
