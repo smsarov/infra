@@ -79,7 +79,7 @@ jobs:
           
           COMMENT="🛠 **Фикс релиза $VERSION ($FIX_ID)**  
 📅 Дата: $DATE  
-👤 Автор: @$AUTHOR  
+👤 Автор: $AUTHOR  
 🔢 Коммиты:
 $COMMITS
 
