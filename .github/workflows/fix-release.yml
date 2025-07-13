@@ -29,25 +29,27 @@ jobs:
 
       - name: Fix code
         run: |
-          echo "// здесь можно внести правки перед пересборкой, если нужно"
-          # например: sed -i 's/OldName/NewName/g' src/constants.js
+          echo "// Здесь можно внести исправления перед пересборкой"
+          # Например: sed -i 's/OldName/NewName/g' src/constants.js
 
       - name: Rebuild app
         run: npm run build
 
       - name: Login to Yandex Container Registry
-        run: echo ${{ secrets.YC_DOCKER_AUTH }} | docker login --username oauth --password-stdin cr.yandex
+        run: echo "${{ secrets.YC_DOCKER_AUTH }}" | docker login --username oauth --password-stdin cr.yandex
 
       - name: Build and push fixed image
         run: |
           docker build -t $REGISTRY:release-${{ github.event.inputs.version }}_fix1 .
           docker push $REGISTRY:release-${{ github.event.inputs.version }}_fix1
 
-      - name: Push tag for fix release
-        env:
-          TOKEN: ${{ secrets.GH_PAT }}
+      - name: Configure git for pushing tags
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
+          git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}
+
+      - name: Create and push tag for fix release
+        run: |
           git tag release-${{ github.event.inputs.version }}_fix1
-          git push https://x-access-token:${TOKEN}@github.com/${{ github.repository }} --tags
+          git push origin --tags
