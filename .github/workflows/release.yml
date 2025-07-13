@@ -6,42 +6,85 @@ on:
 env:
   REGISTRY: ${{ secrets.REGISTRY }}
   GH_PAT: ${{ secrets.GH_PAT }}
-  YC_DOCKER_AUTH: ${{ secrets.YC_DOCKER_AUTH }}
 
 jobs:
   release:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout main branch
+        uses: actions/checkout@v3
+        with:
+          ref: main
 
-      - uses: actions/setup-node@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
         with:
           node-version: 18
 
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run test
-      - run: npm run build
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Login to Yandex Container Registry
-        run: echo "$YC_DOCKER_AUTH" | docker login --username oauth --password-stdin cr.yandex
+      - name: Run linter
+        run: npm run lint
 
-      - name: Build Docker image
-        run: |
-          docker build -t $REGISTRY:release-${{ github.run_number }} .
-          docker tag $REGISTRY:release-${{ github.run_number }} $REGISTRY:release-${{ github.run_number }}_latest
+      - name: Run tests
+        run: npm run test
 
-      - name: Push Docker images
-        run: |
-          docker push $REGISTRY:release-${{ github.run_number }}
-          docker push $REGISTRY:release-${{ github.run_number }}_latest
+      - name: Build app
+        run: npm run build
 
-      - name: Create git tag and push
+      - name: Create release branch
         env:
-          TOKEN: ${{ secrets.GH_PAT }}
+          VERSION: ${{ github.run_number }}
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git tag release-${{ github.run_number }}
-          git push https://x-access-token:${TOKEN}@github.com/${{ github.repository }} --tags
+          git checkout -b releases/$VERSION
+          git push origin releases/$VERSION
+
+      - name: Build Docker images
+        env:
+          VERSION: ${{ github.run_number }}
+        run: |
+          docker build -t $REGISTRY:release-$VERSION .
+          docker tag $REGISTRY:release-$VERSION $REGISTRY:release-${VERSION}_latest
+
+      - name: Login to Yandex Container Registry
+        run: echo ${{ secrets.YC_DOCKER_AUTH }} | docker login --username oauth --password-stdin cr.yandex
+
+      - name: Push Docker images
+        env:
+          VERSION: ${{ github.run_number }}
+        run: |
+          docker push $REGISTRY:release-$VERSION
+          docker push $REGISTRY:release-${VERSION}_latest
+
+      - name: Create git tag
+        env:
+          VERSION: ${{ github.run_number }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          git tag release-$VERSION
+          git push https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} --tags
+
+      - name: Update CHANGELOG and push
+        env:
+          VERSION: ${{ github.run_number }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 release-$((VERSION-1)) || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            COMMITS=$(git log --oneline)
+          else
+            COMMITS=$(git log $PREV_TAG..HEAD --oneline)
+          fi
+          echo "## Release $VERSION - $(date -u +"%Y-%m-%d")" > changelog_tmp.md
+          echo "$COMMITS" >> changelog_tmp.md
+          cat CHANGELOG.md >> changelog_tmp.md
+          mv changelog_tmp.md CHANGELOG.md
+          git add CHANGELOG.md
+          git commit -m "Update CHANGELOG for release $VERSION"
+          git push https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} main
+
+      - name

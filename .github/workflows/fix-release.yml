@@ -4,49 +4,79 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version to fix (number)'
+        description: 'Release version to fix (e.g., 9)'
         required: true
 
 env:
   REGISTRY: ${{ secrets.REGISTRY }}
   GH_PAT: ${{ secrets.GH_PAT }}
-  YC_DOCKER_AUTH: ${{ secrets.YC_DOCKER_AUTH }}
 
 jobs:
   fix-release:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout releases branch
+        uses: actions/checkout@v3
+        with:
+          ref: releases/${{ github.event.inputs.version }}
 
-      - uses: actions/setup-node@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
         with:
           node-version: 18
 
-      - run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Make fixes (if needed)
+      - name: Run type check and tests
         run: |
-          echo "You can add fix commands here if needed"
-          # Example: sed -i 's/OldName/NewName/g' src/client/pages/About.tsx
+          npm run typecheck || exit 1
+          npm run test || exit 1
 
-      - run: npm run build
+      - name: Fix code
+        run: |
+          echo "// Здесь можно добавить sed или другие команды для правок"
+
+      - name: Build fixed Docker images
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          FIX_NUM: 1
+        run: |
+          docker build -t $REGISTRY:release-${VERSION}_fix${FIX_NUM} .
+          docker tag $REGISTRY:release-${VERSION}_fix${FIX_NUM} $REGISTRY:release-${VERSION}_latest
 
       - name: Login to Yandex Container Registry
-        run: echo "$YC_DOCKER_AUTH" | docker login --username oauth --password-stdin cr.yandex
+        run: echo ${{ secrets.YC_DOCKER_AUTH }} | docker login --username oauth --password-stdin cr.yandex
 
-      - name: Build and push fixed Docker image
-        run: |
-          docker build -t $REGISTRY:release-${{ github.event.inputs.version }}_fix1 .
-          docker push $REGISTRY:release-${{ github.event.inputs.version }}_fix1
-          docker tag $REGISTRY:release-${{ github.event.inputs.version }}_fix1 $REGISTRY:release-${{ github.event.inputs.version }}_latest
-          docker push $REGISTRY:release-${{ github.event.inputs.version }}_latest
-
-      - name: Create git tag for fix release and push
+      - name: Push fixed Docker images
         env:
-          TOKEN: ${{ secrets.GH_PAT }}
+          VERSION: ${{ github.event.inputs.version }}
+          FIX_NUM: 1
+        run: |
+          docker push $REGISTRY:release-${VERSION}_fix${FIX_NUM}
+          docker push $REGISTRY:release-${VERSION}_latest
+
+      - name: Create fix release git tag
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          FIX_NUM: 1
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git tag release-${{ github.event.inputs.version }}_fix1
-          git push https://x-access-token:${TOKEN}@github.com/${{ github.repository }} --tags
+          git tag release-${VERSION}_fix${FIX_NUM}
+          git push https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} --tags
+
+      - name: Comment on release Issue
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          FIX_NUM: 1
+          REGISTRY: ${{ secrets.REGISTRY }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          gh auth login --with-token <<< "$GH_PAT"
+          ISSUE_NUMBER=$(gh issue list --search "Release $VERSION" --limit 1 --json number --jq '.[0].number')
+          COMMITS=$(git log --oneline release-${VERSION}..HEAD || echo "No commits found")
+          COMMENT="✅ Fix for release $VERSION:\n\nCommits:\n$COMMITS\n\nDocker images:\n$REGISTRY:release-${VERSION}_fix${FIX_NUM}\n$REGISTRY:release-${VERSION}_latest"
+          gh issue comment $ISSUE_NUMBER --body "$COMMENT"
