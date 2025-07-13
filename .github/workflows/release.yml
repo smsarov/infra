@@ -87,4 +87,19 @@ jobs:
           git commit -m "Update CHANGELOG for release $VERSION"
           git push https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} main
 
-      - name
+      - name: Create Issue
+        env:
+          VERSION: ${{ github.run_number }}
+          REGISTRY: ${{ secrets.REGISTRY }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          gh auth login --with-token <<< "$GH_PAT"
+          PREV_TAG=$(git describe --tags --abbrev=0 release-$((VERSION-1)) || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            COMMITS=$(git log --oneline)
+          else
+            COMMITS=$(git log $PREV_TAG..HEAD --oneline)
+          fi
+          ISSUE_TITLE="Release $VERSION"
+          ISSUE_BODY="Release date: $(date -u)\nAuthor: $GITHUB_ACTOR\nVersion: $VERSION\n\nCommits since last release:\n$COMMITS\n\nDocker images:\n$REGISTRY:release-$VERSION\n$REGISTRY:release-${VERSION}_latest"
+          gh issue create --title "$ISSUE_TITLE" --body "$ISSUE_BODY"
