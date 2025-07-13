@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version to fix (e.g., 8)'
+        description: 'Release version to fix (e.g., 9)'
         required: true
 
 env:
   REGISTRY: ${{ secrets.REGISTRY }}
   GH_TOKEN: ${{ secrets.GH_PAT }}
+  YC_TOKEN: ${{ secrets.YC_DOCKER_AUTH }}
 
 jobs:
   fix-release:
@@ -27,29 +28,61 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Fix code
+      - name: (Optional) Fix code
         run: |
-          echo "// Здесь можно внести исправления перед пересборкой"
-          # Например: sed -i 's/OldName/NewName/g' src/constants.js
+          echo "💡 Здесь можно внести правки — например, через sed или patch"
 
       - name: Rebuild app
         run: npm run build
 
       - name: Login to Yandex Container Registry
-        run: echo "${{ secrets.YC_DOCKER_AUTH }}" | docker login --username oauth --password-stdin cr.yandex
+        run: echo "${{ env.YC_TOKEN }}" | docker login --username oauth --password-stdin cr.yandex
 
-      - name: Build and push fixed image
+      - name: Build and push Docker image with fix tag
         run: |
-          docker build -t $REGISTRY:release-${{ github.event.inputs.version }}_fix1 .
-          docker push $REGISTRY:release-${{ github.event.inputs.version }}_fix1
+          VERSION=${{ github.event.inputs.version }}
+          FIX_TAG=release-${VERSION}_fix1
+          LATEST_TAG=release-${VERSION}_latest
+          
+          docker build -t $REGISTRY:$FIX_TAG .
+          docker tag $REGISTRY:$FIX_TAG $REGISTRY:$LATEST_TAG
 
-      - name: Configure git for pushing tags
+          docker push $REGISTRY:$FIX_TAG
+          docker push $REGISTRY:$LATEST_TAG
+
+      - name: Push Git tag
+        env:
+          TOKEN: ${{ secrets.GH_PAT }}
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}
-
-      - name: Create and push tag for fix release
-        run: |
           git tag release-${{ github.event.inputs.version }}_fix1
-          git push origin --tags
+          git push https://x-access-token:${TOKEN}@github.com/${{ github.repository }} --tags
+
+      - name: Install GitHub CLI
+        run: sudo apt-get update && sudo apt-get install gh -y
+
+      - name: Add comment to GitHub Issue
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          VERSION=${{ github.event.inputs.version }}
+          FIX_ID=fix1
+          
+          ISSUE_NUMBER=$(gh issue list --search "Release $VERSION" --json number -q '.[0].number')
+          
+          DATE=$(date "+%Y-%m-%d")
+          AUTHOR=${{ github.actor }}
+          
+          PREV_TAG=$(git tag --sort=-creatordate | grep "release-$VERSION" | head -n 1)
+          COMMITS=$(git log $PREV_TAG..HEAD --pretty=format:"- %s")
+          
+          COMMENT="🛠 **Фикс релиза $VERSION ($FIX_ID)**  
+📅 Дата: $DATE  
+👤 Автор: @$AUTHOR  
+🔢 Коммиты:
+$COMMITS
+
+📦 Docker image: \`$REGISTRY:release-$VERSION\_$FIX_ID\`"
+
+          echo "$COMMENT" | gh issue comment "$ISSUE_NUMBER" --body -
