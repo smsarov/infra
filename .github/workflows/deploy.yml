@@ -4,22 +4,32 @@ on:
   workflow_dispatch:
     inputs:
       version:
+        description: 'Release version'
         required: true
-        type: string
+        default: '1'
+
+env:
+  REGISTRY: ${{ secrets.REGISTRY }}
+  SSH_HOST: ${{ secrets.SSH_HOST }}
+  SSH_USER: ${{ secrets.SSH_USER }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to server
-        uses: appleboy/ssh-action@v1.0.0
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.8.1
         with:
-          host: ${{ secrets.SERVER_IP }}
-          username: ubuntu
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
+          ssh-private-key: ${{ env.SSH_PRIVATE_KEY }}
+
+      - name: Deploy Docker container on server
+        run: |
+          ssh -o StrictHostKeyChecking=no $SSH_USER@$SSH_HOST << EOF
+            docker login cr.yandex -u oauth -p $(echo ${{ secrets.YC_DOCKER_AUTH }}) || true
+            docker pull $REGISTRY:release-${{ github.event.inputs.version }}_latest
             docker stop app || true
             docker rm app || true
-            docker pull cr.yandex/<твой-registry-id>/app:${{ github.event.inputs.version }}_latest
-            docker run -d --name app -p 80:3000 cr.yandex/<твой-registry-id>/app:${{ github.event.inputs.version }}_latest
+            docker run -d --name app -p 80:3000 $REGISTRY:release-${{ github.event.inputs.version }}_latest
+          EOF
