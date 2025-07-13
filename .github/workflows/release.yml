@@ -11,30 +11,44 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - name: Clone repo using personal token
+        env:
+          TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git clone https://x-access-token:${TOKEN}@github.com/${{ github.repository }} repo
+          cd repo
 
-      - name: Use Node.js 18
+          # Сохраняем путь, чтобы использовать в следующих шагах
+          echo "REPO_DIR=$(pwd)" >> $GITHUB_ENV
+
+      - name: Setup Node
         uses: actions/setup-node@v3
         with:
           node-version: 18
 
       - name: Install dependencies
+        working-directory: ${{ env.REPO_DIR }}
         run: npm ci
 
-      - name: Run linter
+      - name: Lint
+        working-directory: ${{ env.REPO_DIR }}
         run: npm run lint
 
-      - name: Run tests
+      - name: Test
+        working-directory: ${{ env.REPO_DIR }}
         run: npm run test
 
-      - name: Build app
+      - name: Build
+        working-directory: ${{ env.REPO_DIR }}
         run: npm run build
 
       - name: Login to Yandex Container Registry
         run: echo ${{ secrets.YC_DOCKER_AUTH }} | docker login --username oauth --password-stdin cr.yandex
 
       - name: Build Docker image
+        working-directory: ${{ env.REPO_DIR }}
         run: |
           docker build -t $REGISTRY:release-${{ github.run_number }} .
           docker tag $REGISTRY:release-${{ github.run_number }} $REGISTRY:release-${{ github.run_number }}_latest
@@ -48,9 +62,6 @@ jobs:
         env:
           TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git checkout main
-          git pull
+          cd $REPO_DIR
           git checkout -b releases/${{ github.run_number }}
           git push https://x-access-token:${TOKEN}@github.com/${{ github.repository }} HEAD:releases/${{ github.run_number }}
