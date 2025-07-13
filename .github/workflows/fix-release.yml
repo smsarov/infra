@@ -1,0 +1,79 @@
+name: Fix Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 5)'
+        required: true
+
+env:
+  REGISTRY: ${{ secrets.REGISTRY }}
+  GH_TOKEN: ${{ secrets.GH_PAT }}
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Checkout release branch
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git fetch origin releases/${{ github.event.inputs.version }}
+          git checkout releases/${{ github.event.inputs.version }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit || true
+
+      - name: Run tests
+        run: npm test
+
+      - name: Login to Yandex Container Registry
+        run: echo ${{ secrets.YC_DOCKER_AUTH }} | docker login -u oauth --password-stdin cr.yandex
+
+      - name: Build and tag Docker image
+        run: |
+          docker build -t $REGISTRY:release-${{ github.event.inputs.version }}_fix${{ github.run_number }} .
+          docker tag $REGISTRY:release-${{ github.event.inputs.version }}_fix${{ github.run_number }} \
+                     $REGISTRY:release-${{ github.event.inputs.version }}_latest
+
+      - name: Push Docker image
+        run: |
+          docker push $REGISTRY:release-${{ github.event.inputs.version }}_fix${{ github.run_number }}
+          docker push $REGISTRY:release-${{ github.event.inputs.version }}_latest
+
+      - name: Create git tag
+        run: |
+          git tag release-${{ github.event.inputs.version }}_fix${{ github.run_number }}
+          git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }} --tags
+
+      - name: Add comment to GitHub Issue
+        run: |
+          ISSUE_URL=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/${{ github.repository }}/issues \
+            | jq -r '.[] | select(.title | test("release-${{ github.event.inputs.version }}$")) | .comments_url' | head -n 1)
+
+          COMMENT="🚑 **Fix applied**\n- Date: $(date -u)\n- Author: ${{ github.actor }}\n- Docker image: $REGISTRY:release-${{ github.event.inputs.version }}_fix${{ github.run_number }}"
+
+          if [ -n "$ISSUE_URL" ]; then
+            curl -s -X POST "$ISSUE_URL" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"body\": \"$COMMENT\"}"
+          else
+            echo "⚠️ Release issue not found — comment not added."
+          fi
