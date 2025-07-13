@@ -58,16 +58,19 @@ jobs:
           git tag release-${{ github.run_number }}
           git push https://x-access-token:${TOKEN}@github.com/${{ github.repository }} --tags
 
-      - name: Create GitHub Issue for the release
+      - name: Create release issue
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REGISTRY: ${{ secrets.REGISTRY }}
           VERSION: ${{ github.run_number }}
         run: |
-          gh auth setup-git
-          gh auth login --with-token <<< "$GH_TOKEN"
+          echo "$GH_TOKEN" | gh auth login --with-token
+          unset GH_TOKEN
+
           PREV_TAG=$(git describe --tags --abbrev=0 release-$((VERSION-1)) || echo "None")
           COMMITS=$(git log ${PREV_TAG}..HEAD --oneline || echo "No commits found")
+
           ISSUE_TITLE="Release $VERSION"
           ISSUE_BODY="Release date: $(date -u)\nAuthor: ${{ github.actor }}\nVersion: $VERSION\n\nCommits since last release:\n$COMMITS\n\nDocker image:\n$REGISTRY:release-$VERSION"
+
           gh issue create --title "$ISSUE_TITLE" --body "$ISSUE_BODY"
