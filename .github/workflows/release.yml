@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    env:
+      REGISTRY: cr.yandex/<твой-registry-id>/app
+      VERSION: ${{ github.run_number }}
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+
+      - name: Docker auth
+        run: |
+          echo "${{ secrets.YC_DOCKER_AUTH }}" > key.json
+          docker login --username json_key --password-stdin cr.yandex <<< "$(cat key.json)"
+
+      - name: Build and push image
+        run: |
+          docker build -t $REGISTRY:${VERSION} .
+          docker tag $REGISTRY:${VERSION} $REGISTRY:${VERSION}_latest
+          docker push $REGISTRY:${VERSION}
+          docker push $REGISTRY:${VERSION}_latest
