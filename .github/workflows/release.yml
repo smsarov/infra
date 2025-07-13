@@ -5,50 +5,37 @@ on:
 
 env:
   REGISTRY: ${{ secrets.REGISTRY }}
+  GH_TOKEN: ${{ secrets.GH_PAT }}
 
 jobs:
   release:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Clone repo using personal token
-        env:
-          TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-          git clone https://x-access-token:${TOKEN}@github.com/${{ github.repository }} repo
-          cd repo
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-          # Сохраняем путь, чтобы использовать в следующих шагах
-          echo "REPO_DIR=$(pwd)" >> $GITHUB_ENV
-
-      - name: Setup Node
+      - name: Use Node.js 18
         uses: actions/setup-node@v3
         with:
           node-version: 18
 
       - name: Install dependencies
-        working-directory: ${{ env.REPO_DIR }}
         run: npm ci
 
-      - name: Lint
-        working-directory: ${{ env.REPO_DIR }}
+      - name: Run linter
         run: npm run lint
 
-      - name: Test
-        working-directory: ${{ env.REPO_DIR }}
+      - name: Run tests
         run: npm run test
 
-      - name: Build
-        working-directory: ${{ env.REPO_DIR }}
+      - name: Build app
         run: npm run build
 
       - name: Login to Yandex Container Registry
         run: echo ${{ secrets.YC_DOCKER_AUTH }} | docker login --username oauth --password-stdin cr.yandex
 
       - name: Build Docker image
-        working-directory: ${{ env.REPO_DIR }}
         run: |
           docker build -t $REGISTRY:release-${{ github.run_number }} .
           docker tag $REGISTRY:release-${{ github.run_number }} $REGISTRY:release-${{ github.run_number }}_latest
@@ -58,10 +45,29 @@ jobs:
           docker push $REGISTRY:release-${{ github.run_number }}
           docker push $REGISTRY:release-${{ github.run_number }}_latest
 
-      - name: Push release branch
+      - name: Create release branch and tag
         env:
           TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          cd $REPO_DIR
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git checkout main
+          git pull
           git checkout -b releases/${{ github.run_number }}
           git push https://x-access-token:${TOKEN}@github.com/${{ github.repository }} HEAD:releases/${{ github.run_number }}
+          git tag release-${{ github.run_number }}
+          git push https://x-access-token:${TOKEN}@github.com/${{ github.repository }} --tags
+
+      - name: Create GitHub Issue for the release
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REGISTRY: ${{ secrets.REGISTRY }}
+          VERSION: ${{ github.run_number }}
+        run: |
+          gh auth setup-git
+          gh auth login --with-token <<< "$GH_TOKEN"
+          PREV_TAG=$(git describe --tags --abbrev=0 release-$((VERSION-1)) || echo "None")
+          COMMITS=$(git log ${PREV_TAG}..HEAD --oneline || echo "No commits found")
+          ISSUE_TITLE="Release $VERSION"
+          ISSUE_BODY="Release date: $(date -u)\nAuthor: ${{ github.actor }}\nVersion: $VERSION\n\nCommits since last release:\n$COMMITS\n\nDocker image:\n$REGISTRY:release-$VERSION"
+          gh issue create --title "$ISSUE_TITLE" --body "$ISSUE_BODY"
