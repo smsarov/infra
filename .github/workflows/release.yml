@@ -3,33 +3,53 @@ name: Release
 on:
   workflow_dispatch:
 
+env:
+  REGISTRY: ${{ secrets.REGISTRY }}
+
 jobs:
   release:
     runs-on: ubuntu-latest
 
-    env:
-      REGISTRY: cr.yandex/<твой-registry-id>/app
-      VERSION: ${{ github.run_number }}
-
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+
+      - name: Use Node.js 18
+        uses: actions/setup-node@v3
         with:
           node-version: 18
 
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run test
-      - run: npm run build
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Docker auth
-        run: |
-          echo "${{ secrets.YC_DOCKER_AUTH }}" > key.json
-          docker login --username json_key --password-stdin cr.yandex <<< "$(cat key.json)"
+      - name: Run linter
+        run: npm run lint
 
-      - name: Build and push image
+      - name: Run tests
+        run: npm run test
+
+      - name: Build app
+        run: npm run build
+
+      - name: Login to Yandex Container Registry
+        run: echo ${{ secrets.YC_DOCKER_AUTH }} | docker login --username oauth --password-stdin cr.yandex
+
+      - name: Build Docker image
         run: |
-          docker build -t $REGISTRY:${VERSION} .
-          docker tag $REGISTRY:${VERSION} $REGISTRY:${VERSION}_latest
-          docker push $REGISTRY:${VERSION}
-          docker push $REGISTRY:${VERSION}_latest
+          docker build -t $REGISTRY:release-${{ github.run_number }} .
+          docker tag $REGISTRY:release-${{ github.run_number }} $REGISTRY:release-${{ github.run_number }}_latest
+
+      - name: Push Docker image
+        run: |
+          docker push $REGISTRY:release-${{ github.run_number }}
+          docker push $REGISTRY:release-${{ github.run_number }}_latest
+
+      - name: Create release branch
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git checkout main
+          git pull
+          git checkout -b releases/${{ github.run_number }}
+          git push origin releases/${{ github.run_number }}
+
+      # Можно сюда добавить шаги по обновлению CHANGELOG.md и созданию Issue, если хочешь
